@@ -1,0 +1,19 @@
+name: Construct NDVI Temporal Stats
+description: Build temporal series of median NDVI 
+
+inputs:
+- {name: Stat, type: String, description: 'Input path that contains image stats' }
+
+outputs:
+- {name: Data, type: String, description: 'Output path to temporal stats' }
+
+implementation:
+  container:
+    image: albughdadim/kf-pipeline3-construct-temporal-stats:latest
+    command: [
+      python3, /pipelines/components/src/temporal_stats.py,
+      --input_path,
+      {inputPath: Stat},
+      --output_path,
+      {outputPath: Data},
+    ]

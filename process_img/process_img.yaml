@@ -1,0 +1,21 @@
+name: Download Sentinel-2 Images
+description: Download Sentinel-2 images and calculate stats using a shapefile of crops from the RPG
+
+inputs:
+- {name: Json, type: String, description: 'URL of Sentinel-2 Json to be downloaded'}
+- {name: Shp, type: String, description: 'URL of the shapefile to be used for stats without the extension'}
+outputs:
+- {name: Data, type: String, description: 'Output path to store stats from images' }
+
+implementation:
+  container:
+    image: albughdadim/kf-pipeline3-process-img:latest
+    command: [
+      python3, /pipelines/components/src/process_img.py,
+      --json_data,
+      {inputValue: Json},
+      --shp_fname,
+      {inputValue: Shp},
+      --output_path,
+      {outputPath: Data},
+    ]

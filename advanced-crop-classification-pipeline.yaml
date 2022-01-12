@@ -1,0 +1,171 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: advanced-crop-classification-pipeline-
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.10, pipelines.kubeflow.org/pipeline_compilation_time: '2022-01-12T16:14:43.221329',
+    pipelines.kubeflow.org/pipeline_spec: '{"description": "Classify crops extracted
+      from RPG.", "inputs": [{"name": "json_img"}, {"name": "shp"}], "name": "advanced-crop-classification-pipeline"}'}
+  labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.10}
+spec:
+  entrypoint: advanced-crop-classification-pipeline
+  templates:
+  - name: advanced-crop-classification-pipeline
+    inputs:
+      parameters:
+      - {name: json_img}
+      - {name: shp}
+    dag:
+      tasks:
+      - name: construct-ndvi-temporal-stats
+        template: construct-ndvi-temporal-stats
+        dependencies: [download-sentinel-2-images]
+        arguments:
+          artifacts:
+          - {name: download-sentinel-2-images-Data, from: '{{tasks.download-sentinel-2-images.outputs.artifacts.download-sentinel-2-images-Data}}'}
+      - name: download-sentinel-2-images
+        template: download-sentinel-2-images
+        arguments:
+          parameters:
+          - {name: json_img, value: '{{inputs.parameters.json_img}}'}
+          - {name: shp, value: '{{inputs.parameters.shp}}'}
+      - name: preprare-crop-classification-data
+        template: preprare-crop-classification-data
+        dependencies: [construct-ndvi-temporal-stats]
+        arguments:
+          artifacts:
+          - {name: construct-ndvi-temporal-stats-Data, from: '{{tasks.construct-ndvi-temporal-stats.outputs.artifacts.construct-ndvi-temporal-stats-Data}}'}
+      - name: xgboost-classifier-and-tuning
+        template: xgboost-classifier-and-tuning
+        dependencies: [preprare-crop-classification-data]
+        arguments:
+          artifacts:
+          - {name: preprare-crop-classification-data-Data, from: '{{tasks.preprare-crop-classification-data.outputs.artifacts.preprare-crop-classification-data-Data}}'}
+  - name: construct-ndvi-temporal-stats
+    container:
+      args: []
+      command: [python3, /pipelines/components/src/temporal_stats.py, --input_path,
+        /tmp/inputs/Stat/data, --output_path, /tmp/outputs/Data/data]
+      image: albughdadim/kf-pipeline3-construct-temporal-stats:latest
+    inputs:
+      artifacts:
+      - {name: download-sentinel-2-images-Data, path: /tmp/inputs/Stat/data}
+    outputs:
+      artifacts:
+      - {name: construct-ndvi-temporal-stats-Data, path: /tmp/outputs/Data/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.10
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Build
+          temporal series of median NDVI", "implementation": {"container": {"command":
+          ["python3", "/pipelines/components/src/temporal_stats.py", "--input_path",
+          {"inputPath": "Stat"}, "--output_path", {"outputPath": "Data"}], "image":
+          "albughdadim/kf-pipeline3-construct-temporal-stats:latest"}}, "inputs":
+          [{"description": "Input path that contains image stats", "name": "Stat",
+          "type": "String"}], "name": "Construct NDVI Temporal Stats", "outputs":
+          [{"description": "Output path to temporal stats", "name": "Data", "type":
+          "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest": "db8cece3afdf9ae51794863846fc815456deb163962d6823da82cbab833fecbd",
+          "url": "temporal_stats/temporal_stats.yaml"}', pipelines.kubeflow.org/max_cache_staleness: P0D}
+  - name: download-sentinel-2-images
+    container:
+      args: []
+      command: [python3, /pipelines/components/src/process_img.py, --json_data, '{{inputs.parameters.json_img}}',
+        --shp_fname, '{{inputs.parameters.shp}}', --output_path, /tmp/outputs/Data/data]
+      image: albughdadim/kf-pipeline3-process-img:latest
+    inputs:
+      parameters:
+      - {name: json_img}
+      - {name: shp}
+    outputs:
+      artifacts:
+      - {name: download-sentinel-2-images-Data, path: /tmp/outputs/Data/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.10
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Download
+          Sentinel-2 images and calculate stats using a shapefile of crops from the
+          RPG", "implementation": {"container": {"command": ["python3", "/pipelines/components/src/process_img.py",
+          "--json_data", {"inputValue": "Json"}, "--shp_fname", {"inputValue": "Shp"},
+          "--output_path", {"outputPath": "Data"}], "image": "albughdadim/kf-pipeline3-process-img:latest"}},
+          "inputs": [{"description": "URL of Sentinel-2 Json to be downloaded", "name":
+          "Json", "type": "String"}, {"description": "URL of the shapefile to be used
+          for stats without the extension", "name": "Shp", "type": "String"}], "name":
+          "Download Sentinel-2 Images", "outputs": [{"description": "Output path to
+          store stats from images", "name": "Data", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "a3cb291b979673788b17c4576af05e84da6aad3475ed79c4466bc86b0c4d2225", "url":
+          "process_img/process_img.yaml"}', pipelines.kubeflow.org/arguments.parameters: '{"Json":
+          "{{inputs.parameters.json_img}}", "Shp": "{{inputs.parameters.shp}}"}'}
+  - name: preprare-crop-classification-data
+    container:
+      args: []
+      command: [python3, /pipelines/components/src/preprocess_data.py, --input_path,
+        /tmp/inputs/Temporal/data, --output_path, /tmp/outputs/Data/data]
+      image: albughdadim/kf-pipeline3-preprocess-data:latest
+    inputs:
+      artifacts:
+      - {name: construct-ndvi-temporal-stats-Data, path: /tmp/inputs/Temporal/data}
+    outputs:
+      artifacts:
+      - {name: preprare-crop-classification-data-Data, path: /tmp/outputs/Data/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.10
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Prepare
+          crop data for classification including missing data", "implementation":
+          {"container": {"command": ["python3", "/pipelines/components/src/preprocess_data.py",
+          "--input_path", {"inputPath": "Temporal"}, "--output_path", {"outputPath":
+          "Data"}], "image": "albughdadim/kf-pipeline3-preprocess-data:latest"}},
+          "inputs": [{"description": "Input path that contains temporal stats", "name":
+          "Temporal", "type": "String"}], "name": "Preprare Crop Classification Data",
+          "outputs": [{"description": "Output path to store training json", "name":
+          "Data", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "74f74baa597cb45e00e895a99d6aeec62d9cef9c4cab9d482817757871b16e3c", "url":
+          "preprocess_data/preprocess_data.yaml"}', pipelines.kubeflow.org/max_cache_staleness: P0D}
+  - name: xgboost-classifier-and-tuning
+    container:
+      args: []
+      command: [python3, /pipelines/components/src/extreme_gradient_boost.py, --input_path,
+        /tmp/inputs/Data/data, --model_output_path, /tmp/outputs/Model/data, --report_output_path,
+        /tmp/outputs/Report/data, --metadata_output_path, /tmp/outputs/mlpipeline-ui-metadata/data,
+        --metric_output_path, /tmp/outputs/mlpipeline-metrics/data]
+      image: albughdadim/kf-pipeline3-xgboost:latest
+    inputs:
+      artifacts:
+      - {name: preprare-crop-classification-data-Data, path: /tmp/inputs/Data/data}
+    outputs:
+      artifacts:
+      - {name: mlpipeline-ui-metadata, path: /tmp/outputs/mlpipeline-ui-metadata/data}
+      - {name: mlpipeline-metrics, path: /tmp/outputs/mlpipeline-metrics/data}
+      - {name: xgboost-classifier-and-tuning-Model, path: /tmp/outputs/Model/data}
+      - {name: xgboost-classifier-and-tuning-Report, path: /tmp/outputs/Report/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.10
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Classify
+          dataset using Xgboost with randomsearch for hyperparameter tuning", "implementation":
+          {"container": {"command": ["python3", "/pipelines/components/src/extreme_gradient_boost.py",
+          "--input_path", {"inputPath": "Data"}, "--model_output_path", {"outputPath":
+          "Model"}, "--report_output_path", {"outputPath": "Report"}, "--metadata_output_path",
+          {"outputPath": "mlpipeline-ui-metadata"}, "--metric_output_path", {"outputPath":
+          "mlpipeline-metrics"}], "image": "albughdadim/kf-pipeline3-xgboost:latest"}},
+          "inputs": [{"description": "Input to json file.", "name": "Data", "type":
+          "String"}], "name": "XGBoost Classifier and Tuning", "outputs": [{"description":
+          "Output path to store best model", "name": "Model", "type": "String"}, {"description":
+          "Output path to store classification report", "name": "Report", "type":
+          "String"}, {"description": "Output path to viz metadata", "name": "mlpipeline-ui-metadata",
+          "type": "String"}, {"description": "Output path to metrics", "name": "mlpipeline-metrics",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "0457ba5b1d548610efa59c8ed230132df755f999501a2566d98fc69309f39f98", "url":
+          "extreme_gradient_boost/extreme_gradient_boost.yaml"}', pipelines.kubeflow.org/max_cache_staleness: P0D}
+  arguments:
+    parameters:
+    - {name: json_img}
+    - {name: shp}
+  serviceAccountName: pipeline-runner

@@ -1,0 +1,27 @@
+name: XGBoost Classifier and Tuning
+description: Classify dataset using Xgboost with randomsearch for hyperparameter tuning
+
+inputs:
+- {name: Data, type: String, description: 'Input to json file.'}
+
+outputs:
+- {name: Model, type: String, description: 'Output path to store best model'}
+- {name: Report, type: String, description: 'Output path to store classification report'}
+- {name: mlpipeline-ui-metadata, type: String, description: 'Output path to viz metadata'}
+- {name: mlpipeline-metrics, type: String, description: 'Output path to metrics'}
+implementation:
+  container:
+    image: albughdadim/kf-pipeline3-xgboost:latest
+    command: [
+      python3, /pipelines/components/src/extreme_gradient_boost.py,
+      --input_path,
+      {inputPath: Data},
+      --model_output_path,
+      {outputPath: Model},
+      --report_output_path,
+      {outputPath: Report},
+      --metadata_output_path,
+      {outputPath: mlpipeline-ui-metadata},
+      --metric_output_path,
+      {outputPath: mlpipeline-metrics}
+    ]

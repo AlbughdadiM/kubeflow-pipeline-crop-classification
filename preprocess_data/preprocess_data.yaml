@@ -1,0 +1,18 @@
+name: Preprare Crop Classification Data
+description: Prepare crop data for classification including missing data 
+
+inputs:
+- {name: Temporal, type: String, description: 'Input path that contains temporal stats' }
+outputs:
+- {name: Data, type: String, description: 'Output path to store training json' }
+
+implementation:
+  container:
+    image: albughdadim/kf-pipeline3-preprocess-data:latest
+    command: [
+      python3, /pipelines/components/src/preprocess_data.py,
+      --input_path,
+      {inputPath: Temporal},
+      --output_path,
+      {outputPath: Data},
+    ]
