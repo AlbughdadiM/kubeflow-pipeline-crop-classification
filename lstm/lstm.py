@@ -1,18 +1,23 @@
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.callbacks import ModelCheckpoint
+from pathlib import Path
 import json
 import numpy as np
-from os.path import join
-import pandas as pd
-from joblib import dump
-from xgboost import XGBClassifier
+from tensorflow.keras.wrappers.scikit_learn import KerasClassifier
 from sklearn.model_selection import RandomizedSearchCV
 from sklearn.metrics import accuracy_score,f1_score,precision_score,recall_score,confusion_matrix,\
 classification_report
-from pathlib import Path
-import argparse
+import pandas as pd
 import itertools
+import argparse
+
+
 
 def evaluate(model, X_test, y_test):
-    yhat = model.predict(X_test)
+    yhat = model.predict_classes(X_test)
     accuracy = accuracy_score(y_test,yhat)
     f_score = f1_score(y_test,yhat,average='weighted')
     p_score = precision_score(y_test,yhat,average='weighted')
@@ -91,10 +96,17 @@ def create_metric_visualization(accuracy,f_score,p_score,r_score):
     }
     return metrics
 
-    
 
 
-def _xgboost(args):
+def create_lstm_classifier(x_shape=19,y_shape=1,n_class=1):
+    model = Sequential()
+    model.add(LSTM(100,input_shape=(x_shape,y_shape)))
+    model.add(Dense(n_class, activation='sigmoid'))
+    model.compile(loss='binary_crossentropy', optimizer='adam',metrics=['accuracy'])
+    return model
+
+
+def _lstm(args):
     Path(args.model_output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(args.report_output_path).parent.mkdir(parents=True, exist_ok=True)
     Path(args.metadata_output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -111,34 +123,33 @@ def _xgboost(args):
     X_test = np.array(data['x_test'])
     y_test = np.array(data['y_test'])
 
-    n_estimators = [int(x) for x in np.linspace(start = 200, stop = 2000, num = 10)]
-    eta = [0.01,0.05,0.1]
-    subsample = [0.1,0.2,0.5]
-    colsample_bytree = [0.1,0.2,0.5]
-    random_grid = {'n_estimators': n_estimators,
-                'eta': eta,
-                'subsample': subsample,
-                'colsample_bytree': colsample_bytree,
-                }
+    X_train = np.expand_dims(X_train,axis=2)
+    X_test = np.expand_dims(X_test,axis=2)
 
-
-    if args.cross_validation==True:
-        clf = XGBClassifier()
+    list_class = list(np.unique(y_test))
+    n_class = len(list_class)
+    if args.cross_validation:
+        clf = KerasClassifier(build_fn=create_lstm_classifier, x_shape=X_train.shape[1],y_shape=X_train.shape[2],n_class=1)
+        epochs = [50, 100]
+        batches = [16, 32]
+        random_grid = dict(epochs=epochs, batch_size=batches)
         rf_random = RandomizedSearchCV(estimator = clf, param_distributions = random_grid,
-                                n_iter = args.iterations, cv = args.cv, verbose=2, random_state=42, n_jobs = -1)
-        rf_random.fit(X_train, y_train,eval_metric='logloss')
-        model = rf_random.best_estimator_
-        model.fit(X_train,y_train,eval_metric='logloss')
+                               n_iter = args.iterations, cv = args.cv, verbose=2, random_state=42, n_jobs = -1)
+
+        rf_random.fit(X_train, y_train)
+        best_params = rf_random.best_params_
+        model = create_lstm_classifier(X_train.shape[1],X_train.shape[2],1)
+        model.fit(X_train,y_train,epochs=best_params['epochs'],batch_size=best_params['batch_size'])
+
     else:
-        model = XGBClassifier()
-        model.fit(X_train,y_train,eval_metric='logloss')
+        model = create_lstm_classifier(X_train.shape[1],X_train.shape[2],1)
+        model.fit(X_train,y_train,epochs=100,batch_size=16)
+
     accuracy,f_score,p_score,r_score,conf_matrix,class_report = evaluate(model, X_test, y_test)
     class_report_df = pd.DataFrame(class_report).transpose()
     class_report_df.to_csv(args.report_output_path,index=True)
-    list_class = np.unique(y_test)
-    num_class = len(list_class)
-    metadata_conf = create_conf_mat_visualization(conf_matrix,list_class,num_class)
-    dump(model, args.model_output_path)
+    metadata_conf = create_conf_mat_visualization(conf_matrix,list_class,n_class)
+    model.save(args.model_output_path)
 
     with open(args.metadata_output_path, 'w') as f:
         json.dump(metadata_conf, f)
@@ -148,15 +159,12 @@ def _xgboost(args):
         json.dump(metadata_metric, f)
 
 
-    
-
-
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='XGboost classifier')
+    parser = argparse.ArgumentParser(description='LSTM classifier')
     parser.add_argument('--input_path', type=str)
-    parser.add_argument('--cross_validation',type=bool)
-    parser.add_argument('--iterations',type=int)
-    parser.add_argument('--cv',type=int)
+    parser.add_argument('--cross_validation',type=bool,default=False)
+    parser.add_argument('--iterations',type=int,default=2)
+    parser.add_argument('--cv',type=int,default=2)
     parser.add_argument('--model_output_path', type=str)
     parser.add_argument('--report_output_path', type=str)
     parser.add_argument('--metadata_output_path',type=str)
@@ -164,4 +172,11 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    _xgboost(args)
+    _lstm(args)
+
+
+
+
+
+
+

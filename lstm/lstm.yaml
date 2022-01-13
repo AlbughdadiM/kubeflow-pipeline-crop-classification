@@ -1,5 +1,5 @@
-name: XGBoost Classifier and Tuning
-description: Classify dataset using Xgboost with randomsearch for hyperparameter tuning
+name: LSTM Classifier and Tuning
+description: Classify dataset using LSTM with randomsearch for hyperparameter tuning
 
 inputs:
 - {name: Data, type: String, description: 'Input to json file.'}
@@ -14,9 +14,9 @@ outputs:
 - {name: mlpipeline-metrics, type: String, description: 'Output path to metrics'}
 implementation:
   container:
-    image: albughdadim/kf-pipeline3-xgboost:latest
+    image: albughdadim/kf-pipeline3-lstm:latest
     command: [
-      python3, /pipelines/components/src/extreme_gradient_boost.py,
+      python3, /pipelines/components/src/lstm.py,
       --input_path,
       {inputPath: Data},
       --cross_validation,

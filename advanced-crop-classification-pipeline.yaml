@@ -2,9 +2,13 @@ apiVersion: argoproj.io/v1alpha1
 kind: Workflow
 metadata:
   generateName: advanced-crop-classification-pipeline-
-  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.10, pipelines.kubeflow.org/pipeline_compilation_time: '2022-01-12T16:14:43.221329',
+  annotations: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.10, pipelines.kubeflow.org/pipeline_compilation_time: '2022-01-13T17:19:29.893886',
     pipelines.kubeflow.org/pipeline_spec: '{"description": "Classify crops extracted
-      from RPG.", "inputs": [{"name": "json_img"}, {"name": "shp"}], "name": "advanced-crop-classification-pipeline"}'}
+      from RPG.", "inputs": [{"name": "json_img", "type": "String"}, {"name": "shp",
+      "type": "String"}, {"default": "False", "name": "cross_validation", "optional":
+      true, "type": "Boolean"}, {"default": "2", "name": "iterations", "optional":
+      true, "type": "Integer"}, {"default": "2", "name": "cv", "optional": true, "type":
+      "Integer"}], "name": "advanced-crop-classification-pipeline"}'}
   labels: {pipelines.kubeflow.org/kfp_sdk_version: 1.8.10}
 spec:
   entrypoint: advanced-crop-classification-pipeline
@@ -12,10 +16,20 @@ spec:
   - name: advanced-crop-classification-pipeline
     inputs:
       parameters:
+      - {name: cross_validation}
+      - {name: cv}
+      - {name: iterations}
       - {name: json_img}
       - {name: shp}
     dag:
       tasks:
+      - name: compare-models
+        template: compare-models
+        dependencies: [lstm-classifier-and-tuning, xgboost-classifier-and-tuning]
+        arguments:
+          parameters:
+          - {name: lstm-classifier-and-tuning-Report, value: '{{tasks.lstm-classifier-and-tuning.outputs.parameters.lstm-classifier-and-tuning-Report}}'}
+          - {name: xgboost-classifier-and-tuning-Report, value: '{{tasks.xgboost-classifier-and-tuning.outputs.parameters.xgboost-classifier-and-tuning-Report}}'}
       - name: construct-ndvi-temporal-stats
         template: construct-ndvi-temporal-stats
         dependencies: [download-sentinel-2-images]
@@ -28,6 +42,16 @@ spec:
           parameters:
           - {name: json_img, value: '{{inputs.parameters.json_img}}'}
           - {name: shp, value: '{{inputs.parameters.shp}}'}
+      - name: lstm-classifier-and-tuning
+        template: lstm-classifier-and-tuning
+        dependencies: [preprare-crop-classification-data]
+        arguments:
+          parameters:
+          - {name: cross_validation, value: '{{inputs.parameters.cross_validation}}'}
+          - {name: cv, value: '{{inputs.parameters.cv}}'}
+          - {name: iterations, value: '{{inputs.parameters.iterations}}'}
+          artifacts:
+          - {name: preprare-crop-classification-data-Data, from: '{{tasks.preprare-crop-classification-data.outputs.artifacts.preprare-crop-classification-data-Data}}'}
       - name: preprare-crop-classification-data
         template: preprare-crop-classification-data
         dependencies: [construct-ndvi-temporal-stats]
@@ -38,8 +62,111 @@ spec:
         template: xgboost-classifier-and-tuning
         dependencies: [preprare-crop-classification-data]
         arguments:
+          parameters:
+          - {name: cross_validation, value: '{{inputs.parameters.cross_validation}}'}
+          - {name: cv, value: '{{inputs.parameters.cv}}'}
+          - {name: iterations, value: '{{inputs.parameters.iterations}}'}
           artifacts:
           - {name: preprare-crop-classification-data-Data, from: '{{tasks.preprare-crop-classification-data.outputs.artifacts.preprare-crop-classification-data-Data}}'}
+  - name: compare-models
+    container:
+      args: [--xgboost-csv, '{{inputs.parameters.xgboost-classifier-and-tuning-Report}}',
+        --lstm-csv, '{{inputs.parameters.lstm-classifier-and-tuning-Report}}', '----output-paths',
+        /tmp/outputs/Output/data]
+      command:
+      - sh
+      - -ec
+      - |
+        program_path=$(mktemp)
+        printf "%s" "$0" > "$program_path"
+        python3 -u "$program_path" "$@"
+      - |
+        def compare_models(xgboost_csv, lstm_csv):
+
+            xgb_acc = float(xgboost_csv.split('accuracy,')[1].split(',')[0])
+
+            lstm_acc = float(lstm_csv.split('accuracy,')[1].split(',')[0])
+
+            if xgb_acc>=lstm_acc:
+                print ("XGBoost model will be used for serving")
+                #return xgboost_model
+                return "XGB"
+            else:
+                print ("LSTM will be used for serving")
+                #return lstm_model
+                return "LSTM"
+
+        def _serialize_str(str_value: str) -> str:
+            if not isinstance(str_value, str):
+                raise TypeError('Value "{}" has type "{}" instead of str.'.format(
+                    str(str_value), str(type(str_value))))
+            return str_value
+
+        import argparse
+        _parser = argparse.ArgumentParser(prog='Compare models', description='')
+        _parser.add_argument("--xgboost-csv", dest="xgboost_csv", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("--lstm-csv", dest="lstm_csv", type=str, required=True, default=argparse.SUPPRESS)
+        _parser.add_argument("----output-paths", dest="_output_paths", type=str, nargs=1)
+        _parsed_args = vars(_parser.parse_args())
+        _output_files = _parsed_args.pop("_output_paths", [])
+
+        _outputs = compare_models(**_parsed_args)
+
+        _outputs = [_outputs]
+
+        _output_serializers = [
+            _serialize_str,
+
+        ]
+
+        import os
+        for idx, output_file in enumerate(_output_files):
+            try:
+                os.makedirs(os.path.dirname(output_file))
+            except OSError:
+                pass
+            with open(output_file, 'w') as f:
+                f.write(_output_serializers[idx](_outputs[idx]))
+      image: python:3.7
+    inputs:
+      parameters:
+      - {name: lstm-classifier-and-tuning-Report}
+      - {name: xgboost-classifier-and-tuning-Report}
+    outputs:
+      artifacts:
+      - {name: compare-models-Output, path: /tmp/outputs/Output/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.10
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"implementation": {"container":
+          {"args": ["--xgboost-csv", {"inputValue": "xgboost_csv"}, "--lstm-csv",
+          {"inputValue": "lstm_csv"}, "----output-paths", {"outputPath": "Output"}],
+          "command": ["sh", "-ec", "program_path=$(mktemp)\nprintf \"%s\" \"$0\" >
+          \"$program_path\"\npython3 -u \"$program_path\" \"$@\"\n", "def compare_models(xgboost_csv,
+          lstm_csv):\n\n    xgb_acc = float(xgboost_csv.split(''accuracy,'')[1].split('','')[0])\n\n    lstm_acc
+          = float(lstm_csv.split(''accuracy,'')[1].split('','')[0])\n\n    if xgb_acc>=lstm_acc:\n        print
+          (\"XGBoost model will be used for serving\")\n        #return xgboost_model\n        return
+          \"XGB\"\n    else:\n        print (\"LSTM will be used for serving\")\n        #return
+          lstm_model\n        return \"LSTM\"\n\ndef _serialize_str(str_value: str)
+          -> str:\n    if not isinstance(str_value, str):\n        raise TypeError(''Value
+          \"{}\" has type \"{}\" instead of str.''.format(\n            str(str_value),
+          str(type(str_value))))\n    return str_value\n\nimport argparse\n_parser
+          = argparse.ArgumentParser(prog=''Compare models'', description='''')\n_parser.add_argument(\"--xgboost-csv\",
+          dest=\"xgboost_csv\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"--lstm-csv\",
+          dest=\"lstm_csv\", type=str, required=True, default=argparse.SUPPRESS)\n_parser.add_argument(\"----output-paths\",
+          dest=\"_output_paths\", type=str, nargs=1)\n_parsed_args = vars(_parser.parse_args())\n_output_files
+          = _parsed_args.pop(\"_output_paths\", [])\n\n_outputs = compare_models(**_parsed_args)\n\n_outputs
+          = [_outputs]\n\n_output_serializers = [\n    _serialize_str,\n\n]\n\nimport
+          os\nfor idx, output_file in enumerate(_output_files):\n    try:\n        os.makedirs(os.path.dirname(output_file))\n    except
+          OSError:\n        pass\n    with open(output_file, ''w'') as f:\n        f.write(_output_serializers[idx](_outputs[idx]))\n"],
+          "image": "python:3.7"}}, "inputs": [{"name": "xgboost_csv", "type": "String"},
+          {"name": "lstm_csv", "type": "String"}], "name": "Compare models", "outputs":
+          [{"name": "Output", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{}',
+        pipelines.kubeflow.org/arguments.parameters: '{"lstm_csv": "{{inputs.parameters.lstm-classifier-and-tuning-Report}}",
+          "xgboost_csv": "{{inputs.parameters.xgboost-classifier-and-tuning-Report}}"}',
+        pipelines.kubeflow.org/max_cache_staleness: P0D}
   - name: construct-ndvi-temporal-stats
     container:
       args: []
@@ -66,7 +193,7 @@ spec:
           "type": "String"}], "name": "Construct NDVI Temporal Stats", "outputs":
           [{"description": "Output path to temporal stats", "name": "Data", "type":
           "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest": "db8cece3afdf9ae51794863846fc815456deb163962d6823da82cbab833fecbd",
-          "url": "temporal_stats/temporal_stats.yaml"}', pipelines.kubeflow.org/max_cache_staleness: P0D}
+          "url": "temporal_stats/temporal_stats.yaml"}'}
   - name: download-sentinel-2-images
     container:
       args: []
@@ -98,6 +225,59 @@ spec:
           "a3cb291b979673788b17c4576af05e84da6aad3475ed79c4466bc86b0c4d2225", "url":
           "process_img/process_img.yaml"}', pipelines.kubeflow.org/arguments.parameters: '{"Json":
           "{{inputs.parameters.json_img}}", "Shp": "{{inputs.parameters.shp}}"}'}
+  - name: lstm-classifier-and-tuning
+    container:
+      args: []
+      command: [python3, /pipelines/components/src/lstm.py, --input_path, /tmp/inputs/Data/data,
+        --cross_validation, '{{inputs.parameters.cross_validation}}', --iterations,
+        '{{inputs.parameters.iterations}}', --cv, '{{inputs.parameters.cv}}', --model_output_path,
+        /tmp/outputs/Model/data, --report_output_path, /tmp/outputs/Report/data, --metadata_output_path,
+        /tmp/outputs/mlpipeline-ui-metadata/data, --metric_output_path, /tmp/outputs/mlpipeline-metrics/data]
+      image: albughdadim/kf-pipeline3-lstm:latest
+    inputs:
+      parameters:
+      - {name: cross_validation}
+      - {name: cv}
+      - {name: iterations}
+      artifacts:
+      - {name: preprare-crop-classification-data-Data, path: /tmp/inputs/Data/data}
+    outputs:
+      parameters:
+      - name: lstm-classifier-and-tuning-Report
+        valueFrom: {path: /tmp/outputs/Report/data}
+      artifacts:
+      - {name: mlpipeline-ui-metadata, path: /tmp/outputs/mlpipeline-ui-metadata/data}
+      - {name: mlpipeline-metrics, path: /tmp/outputs/mlpipeline-metrics/data}
+      - {name: lstm-classifier-and-tuning-Model, path: /tmp/outputs/Model/data}
+      - {name: lstm-classifier-and-tuning-Report, path: /tmp/outputs/Report/data}
+    metadata:
+      labels:
+        pipelines.kubeflow.org/kfp_sdk_version: 1.8.10
+        pipelines.kubeflow.org/pipeline-sdk-type: kfp
+        pipelines.kubeflow.org/enable_caching: "true"
+      annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Classify
+          dataset using LSTM with randomsearch for hyperparameter tuning", "implementation":
+          {"container": {"command": ["python3", "/pipelines/components/src/lstm.py",
+          "--input_path", {"inputPath": "Data"}, "--cross_validation", {"inputValue":
+          "CrossValidation"}, "--iterations", {"inputValue": "Iterations"}, "--cv",
+          {"inputValue": "CV"}, "--model_output_path", {"outputPath": "Model"}, "--report_output_path",
+          {"outputPath": "Report"}, "--metadata_output_path", {"outputPath": "mlpipeline-ui-metadata"},
+          "--metric_output_path", {"outputPath": "mlpipeline-metrics"}], "image":
+          "albughdadim/kf-pipeline3-lstm:latest"}}, "inputs": [{"description": "Input
+          to json file.", "name": "Data", "type": "String"}, {"description": "Cross
+          validation option", "name": "CrossValidation", "type": "Boolean"}, {"description":
+          "Number of search iterations", "name": "Iterations", "type": "Integer"},
+          {"description": "Number of cross validation", "name": "CV", "type": "Integer"}],
+          "name": "LSTM Classifier and Tuning", "outputs": [{"description": "Output
+          path to store best model", "name": "Model", "type": "String"}, {"description":
+          "Output path to store classification report", "name": "Report", "type":
+          "String"}, {"description": "Output path to viz metadata", "name": "mlpipeline-ui-metadata",
+          "type": "String"}, {"description": "Output path to metrics", "name": "mlpipeline-metrics",
+          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
+          "99408a38db1d638f6d44a2f359d14c1117c9c25602bcd72f3dfc20e0e90b3d3d", "url":
+          "lstm/lstm.yaml"}', pipelines.kubeflow.org/arguments.parameters: '{"CV":
+          "{{inputs.parameters.cv}}", "CrossValidation": "{{inputs.parameters.cross_validation}}",
+          "Iterations": "{{inputs.parameters.iterations}}"}'}
   - name: preprare-crop-classification-data
     container:
       args: []
@@ -125,19 +305,28 @@ spec:
           "outputs": [{"description": "Output path to store training json", "name":
           "Data", "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
           "74f74baa597cb45e00e895a99d6aeec62d9cef9c4cab9d482817757871b16e3c", "url":
-          "preprocess_data/preprocess_data.yaml"}', pipelines.kubeflow.org/max_cache_staleness: P0D}
+          "preprocess_data/preprocess_data.yaml"}'}
   - name: xgboost-classifier-and-tuning
     container:
       args: []
       command: [python3, /pipelines/components/src/extreme_gradient_boost.py, --input_path,
-        /tmp/inputs/Data/data, --model_output_path, /tmp/outputs/Model/data, --report_output_path,
-        /tmp/outputs/Report/data, --metadata_output_path, /tmp/outputs/mlpipeline-ui-metadata/data,
-        --metric_output_path, /tmp/outputs/mlpipeline-metrics/data]
+        /tmp/inputs/Data/data, --cross_validation, '{{inputs.parameters.cross_validation}}',
+        --iterations, '{{inputs.parameters.iterations}}', --cv, '{{inputs.parameters.cv}}',
+        --model_output_path, /tmp/outputs/Model/data, --report_output_path, /tmp/outputs/Report/data,
+        --metadata_output_path, /tmp/outputs/mlpipeline-ui-metadata/data, --metric_output_path,
+        /tmp/outputs/mlpipeline-metrics/data]
       image: albughdadim/kf-pipeline3-xgboost:latest
     inputs:
+      parameters:
+      - {name: cross_validation}
+      - {name: cv}
+      - {name: iterations}
       artifacts:
       - {name: preprare-crop-classification-data-Data, path: /tmp/inputs/Data/data}
     outputs:
+      parameters:
+      - name: xgboost-classifier-and-tuning-Report
+        valueFrom: {path: /tmp/outputs/Report/data}
       artifacts:
       - {name: mlpipeline-ui-metadata, path: /tmp/outputs/mlpipeline-ui-metadata/data}
       - {name: mlpipeline-metrics, path: /tmp/outputs/mlpipeline-metrics/data}
@@ -151,21 +340,32 @@ spec:
       annotations: {pipelines.kubeflow.org/component_spec: '{"description": "Classify
           dataset using Xgboost with randomsearch for hyperparameter tuning", "implementation":
           {"container": {"command": ["python3", "/pipelines/components/src/extreme_gradient_boost.py",
-          "--input_path", {"inputPath": "Data"}, "--model_output_path", {"outputPath":
-          "Model"}, "--report_output_path", {"outputPath": "Report"}, "--metadata_output_path",
-          {"outputPath": "mlpipeline-ui-metadata"}, "--metric_output_path", {"outputPath":
-          "mlpipeline-metrics"}], "image": "albughdadim/kf-pipeline3-xgboost:latest"}},
-          "inputs": [{"description": "Input to json file.", "name": "Data", "type":
-          "String"}], "name": "XGBoost Classifier and Tuning", "outputs": [{"description":
-          "Output path to store best model", "name": "Model", "type": "String"}, {"description":
-          "Output path to store classification report", "name": "Report", "type":
-          "String"}, {"description": "Output path to viz metadata", "name": "mlpipeline-ui-metadata",
-          "type": "String"}, {"description": "Output path to metrics", "name": "mlpipeline-metrics",
-          "type": "String"}]}', pipelines.kubeflow.org/component_ref: '{"digest":
-          "0457ba5b1d548610efa59c8ed230132df755f999501a2566d98fc69309f39f98", "url":
-          "extreme_gradient_boost/extreme_gradient_boost.yaml"}', pipelines.kubeflow.org/max_cache_staleness: P0D}
+          "--input_path", {"inputPath": "Data"}, "--cross_validation", {"inputValue":
+          "CrossValidation"}, "--iterations", {"inputValue": "Iterations"}, "--cv",
+          {"inputValue": "CV"}, "--model_output_path", {"outputPath": "Model"}, "--report_output_path",
+          {"outputPath": "Report"}, "--metadata_output_path", {"outputPath": "mlpipeline-ui-metadata"},
+          "--metric_output_path", {"outputPath": "mlpipeline-metrics"}], "image":
+          "albughdadim/kf-pipeline3-xgboost:latest"}}, "inputs": [{"description":
+          "Input to json file.", "name": "Data", "type": "String"}, {"description":
+          "Cross validation option", "name": "CrossValidation", "type": "Boolean"},
+          {"description": "Number of search iterations", "name": "Iterations", "type":
+          "Integer"}, {"description": "Number of cross validation", "name": "CV",
+          "type": "Integer"}], "name": "XGBoost Classifier and Tuning", "outputs":
+          [{"description": "Output path to store best model", "name": "Model", "type":
+          "String"}, {"description": "Output path to store classification report",
+          "name": "Report", "type": "String"}, {"description": "Output path to viz
+          metadata", "name": "mlpipeline-ui-metadata", "type": "String"}, {"description":
+          "Output path to metrics", "name": "mlpipeline-metrics", "type": "String"}]}',
+        pipelines.kubeflow.org/component_ref: '{"digest": "64d90c3dac73e0ed194c6ba91b7646cb0dae911784a2866a1afcbf08407b54f0",
+          "url": "extreme_gradient_boost/extreme_gradient_boost.yaml"}', pipelines.kubeflow.org/arguments.parameters: '{"CV":
+          "{{inputs.parameters.cv}}", "CrossValidation": "{{inputs.parameters.cross_validation}}",
+          "Iterations": "{{inputs.parameters.iterations}}"}'}
   arguments:
     parameters:
     - {name: json_img}
     - {name: shp}
+    - name: cross_validation
+      value: "False"
+    - {name: iterations, value: '2'}
+    - {name: cv, value: '2'}
   serviceAccountName: pipeline-runner
