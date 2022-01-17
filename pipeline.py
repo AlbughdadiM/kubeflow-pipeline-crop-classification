@@ -1,6 +1,6 @@
 import kfp
 from kfp import dsl
-from kfp.components import create_component_from_func
+from kfp.components import create_component_from_func, InputPath
 
 
 
@@ -9,19 +9,19 @@ from kfp.components import create_component_from_func
 @dsl.pipeline(name='advanced-crop-classification-pipeline', description='Classify crops extracted from RPG.')
 def crop_classification_pipeline(json_img: str,shp:str,cross_validation: bool = False,iterations: int = 2,cv: int = 2):
 
-    def compare_models(xgboost_csv : str, lstm_csv : str) -> str:
+    def compare_models(xgboost_csv : InputPath(str), lstm_csv : InputPath(str)) -> str:
+        import pandas as pd
+        xgb_df = pd.read_csv(xgboost_csv)
+        xgb_acc = xgb_df['precision'][2]
         
-        xgb_acc = float(xgboost_csv.split('accuracy,')[1].split(',')[0])
-
-        lstm_acc = float(lstm_csv.split('accuracy,')[1].split(',')[0])
+        lstm_df = pd.read_csv(lstm_csv)
+        lstm_acc = lstm_df['precision'][2]
         
         if xgb_acc>=lstm_acc:
             print ("XGBoost model will be used for serving")
-            #return xgboost_model
             return "XGB"
         else:
             print ("LSTM will be used for serving")
-            #return lstm_model
             return "LSTM"
 
     # create components from yaml manifest 
@@ -34,7 +34,7 @@ def crop_classification_pipeline(json_img: str,shp:str,cross_validation: bool = 
                         func=compare_models,
                         base_image='python:3.7', 
                         #output_component_file='compare_models.yaml', 
-                        #packages_to_install=['pandas==0.24'],
+                        packages_to_install=['pandas==0.24'],
                     )
 
     # Run first task
