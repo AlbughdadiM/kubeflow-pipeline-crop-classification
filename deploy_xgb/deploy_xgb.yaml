@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xgb-service
+  namespace: kubeflow
+spec:
+  selector:
+    app: xgb-api
+  ports:
+  - port: 5000
+    targetPort: 5000
+  type: LoadBalancer
+
+
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: xgb-api
+  namespace: kubeflow
+spec:
+  selector:
+    matchLabels:
+      app: xgb-api
+  template:
+    metadata:
+      labels:
+        app: xgb-api
+    spec:
+      containers:
+      - name: xgb-api
+        image: albughdadim/kf-pipeline3-xgb-deploy:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 5000
