@@ -1,6 +1,6 @@
 import kfp
 from kfp import dsl
-from kfp.components import create_component_from_func, InputPath
+from kfp.components import  InputPath
 
 
 
@@ -30,7 +30,7 @@ def crop_classification_pipeline(json_img: str,shp:str,cross_validation: bool = 
     preprocess = kfp.components.load_component_from_file('preprocess_data/preprocess_data.yaml')
     xgboost_classif = kfp.components.load_component_from_file('extreme_gradient_boost/extreme_gradient_boost.yaml')
     lstm_classif = kfp.components.load_component_from_file('lstm/lstm.yaml')
-    compare = create_component_from_func(
+    compare = kfp.components.create_component_from_func(
                         func=compare_models,
                         base_image='python:3.7', 
                         #output_component_file='compare_models.yaml', 

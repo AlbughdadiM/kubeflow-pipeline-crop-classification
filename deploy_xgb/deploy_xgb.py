@@ -1,6 +1,5 @@
 from flask import Flask
 from flask import request
-import argparse
 import joblib
 import json
 import os
